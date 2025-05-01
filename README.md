@@ -20,7 +20,9 @@ python firmware_notifier.py
 También disponible una versión ligera para Texmux:
 
 ```bash
-curl -s https://raw.githubusercontent.com/AMonten/firmware-notifier/master/firmware_notifier.sh | bash
+ curl -O https://raw.githubusercontent.com/AMonten/firmware-notifier/master/firmware_notifier.sh
+chmod +x firmware_notifier.sh
+./firmware_notifier.sh
 ```
 
 ## 📋 Requisitos
