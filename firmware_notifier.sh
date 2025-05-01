@@ -2,7 +2,7 @@
 
 # Configuración
 CHECK_INTERVAL=1800  # 30 minutos en segundos
-USER_AGENT="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+USER_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 # Colores para la salida
 RED='\033[0;31m'
@@ -23,6 +23,15 @@ validate_input() {
     return 0
 }
 
+# Validar formato de versión
+validate_version() {
+    if [[ ! "$1" =~ ^S[0-9]{3}[A-Za-z0-9]+UES[0-9A-Z]+$ ]]; then
+        echo -e "${RED}Error: Formato de versión inválido (ej: S901U1UES8EYC1)${NC}"
+        return 1
+    fi
+    return 0
+}
+
 # Solicitar los datos al usuario con validación
 while true; do
     read -p "🔧 Ingresa el modelo (ej: S901U1): " model
@@ -36,7 +45,7 @@ done
 
 while true; do
     read -p "📦 Ingresa tu versión actual (ej: S901U1UES8EYC1): " current_version
-    validate_input "$current_version" && break
+    validate_input "$current_version" && validate_version "$current_version" && break
 done
 
 while true; do
@@ -46,11 +55,10 @@ while true; do
         read -p "¿Continuar sin webhook? (s/n): " choice
         [[ "$choice" =~ ^[sS] ]] && break
     else
-        # Validación básica de URL
         if [[ "$webhook_url" =~ ^https://discord\.com/api/webhooks/ ]]; then
             break
         else
-            echo -e "${RED}Error: La URL del webhook no parece válida.${NC}"
+            echo -e "${RED}Error: URL de webhook inválida. Debe comenzar con: https://discord.com/api/webhooks/${NC}"
         fi
     fi
 done
@@ -64,15 +72,18 @@ send_notification() {
     if [[ -n "$webhook_url" ]]; then
         local message="🚨 **Nueva actualización disponible!** 🚨\n📱 **Modelo:** SM-${model}/${csc}\n🆕 **Versión:** ${latest_version}\n🔗 ${url}"
         
-        curl -sS -H "Content-Type: application/json" \
-             -X POST \
-             -d "{\"content\": \"$message\", \"username\": \"One UI Notifier\"}" \
-             "$webhook_url" > /dev/null
+        response=$(curl -sw "%{http_code}" -H "Content-Type: application/json" \
+            -X POST \
+            -d "{\"content\": \"$message\", \"username\": \"One UI Notifier\"}" \
+            "$webhook_url")
         
-        if [ $? -eq 0 ]; then
-            echo -e "${GREEN}✓ Notificación enviada a Discord${NC}"
+        status_code=${response: -3}
+        
+        if [ $status_code -ge 200 ] && [ $status_code -lt 300 ]; then
+            echo -e "${GREEN}✓ Notificación enviada a Discord (Código: $status_code)${NC}"
         else
-            echo -e "${RED}✗ Error al enviar notificación a Discord${NC}"
+            echo -e "${RED}✗ Error al enviar notificación (Código: $status_code)${NC}"
+            echo -e "${YELLOW}Respuesta del servidor: ${response%???}${NC}"
         fi
     fi
 }
@@ -87,19 +98,28 @@ while true; do
     
     # Obtener la última versión
     echo -e "${YELLOW}⏳ Obteniendo información del servidor...${NC}"
-    page_content=$(curl -s -A "$USER_AGENT" "$url")
     
-    if [[ -z "$page_content" ]]; then
-        echo -e "${RED}✗ Error: No se pudo obtener datos del servidor${NC}"
-        sleep 60  # Esperar 1 minuto antes de reintentar
+    page_content=$(curl -s -A "$USER_AGENT" -w "%{http_code}" "$url")
+    status_code=${page_content: -3}
+    content=${page_content%???}
+    
+    if [[ $status_code -ne 200 ]]; then
+        echo -e "${RED}✗ Error en la solicitud (Código: $status_code)${NC}"
+        sleep 60
         continue
     fi
     
-    latest_version=$(echo "$page_content" | grep -oP '(?<=<td class="text-nowrap">).*?(?=</td>)' | head -n 1)
+    if [[ -z "$content" ]]; then
+        echo -e "${RED}✗ No se recibió contenido del servidor${NC}"
+        sleep 60
+        continue
+    fi
+    
+    latest_version=$(echo "$content" | grep -oP 'S[0-9]{3}[A-Za-z0-9]+UES[0-9A-Z]+(?=")' | head -n 1)
     
     if [[ -z "$latest_version" ]]; then
         echo -e "${RED}✗ No se pudo extraer la versión de la página${NC}"
-        echo -e "${YELLOW}ℹ Puede que el modelo o CSC sean incorrectos, o el sitio haya cambiado su estructura.${NC}"
+        echo -e "${YELLOW}ℹ Posibles causas:\n1. Modelo/CSC incorrectos\n2. Estructura del sitio cambiada\n3. No hay actualizaciones disponibles${NC}"
     else
         echo -e "${BLUE}ℹ Versión actual: $current_version${NC}"
         echo -e "${BLUE}ℹ Última versión disponible: $latest_version${NC}"
