@@ -125,8 +125,6 @@ if __name__ == '__main__':
     # Iniciar el thread de verificación de firmware
     threading.Thread(target=firmware_check_loop, daemon=True).start()
     
-    # Configuración del puerto
+    # Iniciar Flask
     port = int(os.environ.get("PORT", 10000))
-    
-    # Iniciar Flask con configuración para producción
-    app.run(host='0.0.0.0', port=port, threaded=True)
+    app.run(host='0.0.0.0', port=port)
