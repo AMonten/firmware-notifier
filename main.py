@@ -12,7 +12,7 @@ app = Flask(__name__)
 
 # Configuración fija
 CHECK_INTERVAL = 1800  # 30 minutos (en segundos)
-TEMP_DIR = "/tmp"
+TEMP_DIR = os.getenv('TEMP', '/tmp')
 LOG_FILE = os.path.join(TEMP_DIR, "firmware_check.log")
 STATE_FILE = os.path.join(TEMP_DIR, "firmware_state.json")
 
