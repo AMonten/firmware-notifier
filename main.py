@@ -1,8 +1,13 @@
 import os
-import requests
-from bs4 import BeautifulSoup
+import threading
 import time
 import random
+import requests
+from bs4 import BeautifulSoup
+from flask import Flask
+
+# Inicializar Flask
+app = Flask(__name__)
 
 # Configuración fija
 CHECK_INTERVAL = 1800  # 30 minutos
@@ -73,11 +78,11 @@ def send_notification(webhook_url, model, csc, latest_version, url):
     try:
         response = requests.post(webhook_url, json=data, timeout=10)
         response.raise_for_status()
-        print("✅ Notificación enviada correctamente.")
+        log_error("✅ Notificación enviada correctamente.")
     except Exception as e:
         log_error(f"Error al enviar notificación: {str(e)}")
 
-def main():
+def firmware_check_loop():
     print("=== Firmware Notifier ===")
     model = os.environ.get("MODEL", "S901U1")
     csc = os.environ.get("CSC", "XAA")
@@ -85,30 +90,39 @@ def main():
     webhook_url = os.environ.get("WEBHOOK_URL")
 
     if not webhook_url:
-        print("❌ WEBHOOK_URL no está configurado.")
+        log_error("❌ WEBHOOK_URL no está configurado.")
         return
 
     url = f"https://samfw.com/firmware/SM-{model}/{csc}"
-    print(f"\n📡 URL generada: {url}")
+    log_error(f"📡 URL generada: {url}")
     
     while True:
         try:
-            print(f"\n🔎 Verificando actualizaciones {time.strftime('%Y-%m-%d %H:%M:%S')}...")
+            log_error(f"🔎 Verificando actualizaciones {time.strftime('%Y-%m-%d %H:%M:%S')}...")
             latest_version = get_latest_version(url)
             
             if not latest_version:
-                print("⚠️ No se pudo obtener la última versión.")
+                log_error("⚠️ No se pudo obtener la última versión.")
             elif latest_version != current_version:
-                print(f"✅ ¡Nueva versión detectada! ({latest_version}) Enviando notificación...")
+                log_error(f"✅ ¡Nueva versión detectada! ({latest_version}) Enviando notificación...")
                 send_notification(webhook_url, model, csc, latest_version, url)
-                break  # Termina si detecta nueva versión
+                current_version = latest_version  # Actualiza la versión actual para futuras comparaciones
             else:
-                print(f"⏳ No hay nuevas versiones (actual: {current_version})")
+                log_error(f"⏳ No hay nuevas versiones (actual: {current_version})")
                 
         except Exception as e:
             log_error(f"Error en el loop principal: {str(e)}")
         
         time.sleep(CHECK_INTERVAL)
 
-if __name__ == "__main__":
-    main()
+# Ruta simple para verificar que el servicio está funcionando
+@app.route('/')
+def home():
+    return "Firmware Notifier funcionando correctamente."
+
+# Lanzar la app y el thread de verificación
+if __name__ == '__main__':
+    # Iniciar el thread de verificación de firmware en segundo plano
+    threading.Thread(target=firmware_check_loop, daemon=True).start()
+    # Iniciar la aplicación Flask
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
