@@ -3,6 +3,7 @@ import threading
 import time
 import random
 import requests
+import json
 from bs4 import BeautifulSoup
 from flask import Flask, render_template_string
 
@@ -10,8 +11,14 @@ from flask import Flask, render_template_string
 app = Flask(__name__)
 
 # Configuración fija
-CHECK_INTERVAL = 780  # 13 minutos
+CHECK_INTERVAL = 1800  # 30 minutos (en segundos)
 LOG_FILE = "firmware_check.log"
+STATE_FILE = "firmware_state.json"
+
+# Estado persistente
+LAST_CHECK = None
+NEXT_CHECK = None
+CURRENT_VERSION = os.environ.get("CURRENT_VERSION", "S901U1UES8EYC1")
 
 # Lista de User-Agents
 USER_AGENTS = [
@@ -108,6 +115,28 @@ HTML_TEMPLATE = """
 </html>
 """
 
+# Funciones de persistencia
+def save_state():
+    state = {
+        'last_check': LAST_CHECK,
+        'next_check': NEXT_CHECK,
+        'current_version': CURRENT_VERSION
+    }
+    with open(STATE_FILE, 'w') as f:
+        json.dump(state, f)
+
+def load_state():
+    try:
+        with open(STATE_FILE, 'r') as f:
+            state = json.load(f)
+            global LAST_CHECK, NEXT_CHECK, CURRENT_VERSION
+            LAST_CHECK = state.get('last_check')
+            NEXT_CHECK = state.get('next_check')
+            CURRENT_VERSION = state.get('current_version', os.environ.get("CURRENT_VERSION", "S901U1UES8EYC1"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+
+# Funciones auxiliares
 def get_headers():
     return {
         "User-Agent": random.choice(USER_AGENTS),
@@ -121,7 +150,7 @@ def get_headers():
 def log_error(message):
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     log_entry = f"[{timestamp}] {message}"
-    print(log_entry)  # También imprimir en consola
+    print(log_entry)
     with open(LOG_FILE, 'a') as f:
         f.write(log_entry + "\n")
 
@@ -170,10 +199,10 @@ def send_notification(webhook_url, model, csc, latest_version, url):
         log_error(f"❌ Error al enviar notificación: {str(e)}")
 
 def firmware_check_loop():
-    log_error("=== Firmware Notifier ===")
+    global LAST_CHECK, NEXT_CHECK, CURRENT_VERSION
+    
     model = os.environ.get("MODEL", "S901U1")
     csc = os.environ.get("CSC", "XAA")
-    current_version = os.environ.get("CURRENT_VERSION", "S901U1UES8EYC1")
     webhook_url = os.environ.get("WEBHOOK_URL")
 
     if not webhook_url:
@@ -181,21 +210,28 @@ def firmware_check_loop():
         return
 
     url = f"https://samfw.com/firmware/SM-{model}/{csc}"
-    log_error("📡 URL generada: " + url)
+    log_error("=== Firmware Notifier ===")
+    log_error(f"📡 Monitoring: SM-{model}/{csc} (Current: {CURRENT_VERSION})")
     
     while True:
         try:
-            log_error(f"🔎 Verificando actualizaciones {time.strftime('%Y-%m-%d %H:%M:%S')}...")
+            LAST_CHECK = time.strftime("%Y-%m-%d %H:%M:%S")
+            NEXT_CHECK = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() + CHECK_INTERVAL))
+            
+            log_error(f"🔎 Verificando actualizaciones {LAST_CHECK}...")
             latest_version = get_latest_version(url)
             
             if not latest_version:
                 log_error("⚠️ No se pudo obtener la última versión.")
-            elif latest_version != current_version:
+            elif latest_version != CURRENT_VERSION:
                 log_error(f"✅ ¡Nueva versión detectada! ({latest_version}) Enviando notificación...")
                 send_notification(webhook_url, model, csc, latest_version, url)
-                current_version = latest_version  # Actualiza la versión actual para futuras comparaciones
+                CURRENT_VERSION = latest_version
+                save_state()
             else:
-                log_error(f"⏳ No hay nuevas versiones (actual: {current_version})")
+                log_error(f"⏳ No hay nuevas versiones (actual: {CURRENT_VERSION})")
+            
+            save_state()
                 
         except Exception as e:
             log_error(f"❌ Error en el loop principal: {str(e)}")
@@ -209,31 +245,26 @@ def read_logs():
     except FileNotFoundError:
         return ["No hay registros disponibles."]
 
+# Rutas Flask
 @app.route('/')
 def home():
     return render_template_string(HTML_TEMPLATE,
         model=os.environ.get("MODEL", "S901U1"),
         csc=os.environ.get("CSC", "XAA"),
-        current_version=os.environ.get("CURRENT_VERSION", "S901U1UES8EYC1"),
-        last_check=time.strftime("%Y-%m-%d %H:%M:%S"),
-        next_check=time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() + CHECK_INTERVAL)),
+        current_version=CURRENT_VERSION,
+        last_check=LAST_CHECK or "No se ha verificado aún",
+        next_check=NEXT_CHECK or "No programado",
         check_interval=CHECK_INTERVAL//60,
         logs=read_logs()
     )
 
-def create_app():
-    # Iniciar el thread de verificación de firmware
-    thread = threading.Thread(target=firmware_check_loop, daemon=True)
-    thread.start()
-    return app
-
-# Lanzar la app
+# Inicialización
 if __name__ == '__main__':
-    # Configuración específica para Render
-    port = int(os.environ.get("PORT", 10000))
+    load_state()
     
     # Iniciar el thread de verificación
     threading.Thread(target=firmware_check_loop, daemon=True).start()
     
-    # Iniciar Flask con configuración para producción
-    app.run(host='0.0.0.0', port=port, threaded=True)
+    # Configuración para Render
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
