@@ -12,8 +12,9 @@ app = Flask(__name__)
 
 # Configuración fija
 CHECK_INTERVAL = 1800  # 30 minutos (en segundos)
-LOG_FILE = "firmware_check.log"
-STATE_FILE = "firmware_state.json"
+TEMP_DIR = "/tmp"
+LOG_FILE = os.path.join(TEMP_DIR, "firmware_check.log")
+STATE_FILE = os.path.join(TEMP_DIR, "firmware_state.json")
 
 # Estado persistente
 LAST_CHECK = None
