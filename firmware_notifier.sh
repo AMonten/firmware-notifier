@@ -17,7 +17,7 @@ while true; do
     echo "🔎 Verificando actualizaciones $(date '+%Y-%m-%d %H:%M:%S')..."
     
     # Obtener la última versión desde el sitio
-    latest_version=$(curl -s -A "Mozilla/5.0" "$url" | grep -oP '(?<=/firmware/SM-).*?(?=</a></td>)' | head -n 1)
+    latest_version=$(curl -s -A "Mozilla/5.0" "$url" | grep -oP '(?<=<td class="text-nowrap">).*?(?=</td>)' | head -n 1)
     
     if [ -z "$latest_version" ]; then
         echo "⚠️ No se pudo obtener la última versión."
