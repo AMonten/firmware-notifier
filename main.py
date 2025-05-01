@@ -170,7 +170,7 @@ def send_notification(webhook_url, model, csc, latest_version, url):
         log_error(f"❌ Error al enviar notificación: {str(e)}")
 
 def firmware_check_loop():
-    print("=== Firmware Notifier ===")
+    log_error("=== Firmware Notifier ===")
     model = os.environ.get("MODEL", "S901U1")
     csc = os.environ.get("CSC", "XAA")
     current_version = os.environ.get("CURRENT_VERSION", "S901U1UES8EYC1")
@@ -221,11 +221,19 @@ def home():
         logs=read_logs()
     )
 
-# Lanzar la app y el thread de verificación
-if __name__ == '__main__':
+def create_app():
     # Iniciar el thread de verificación de firmware
+    thread = threading.Thread(target=firmware_check_loop, daemon=True)
+    thread.start()
+    return app
+
+# Lanzar la app
+if __name__ == '__main__':
+    # Configuración específica para Render
+    port = int(os.environ.get("PORT", 10000))
+    
+    # Iniciar el thread de verificación
     threading.Thread(target=firmware_check_loop, daemon=True).start()
     
-    # Iniciar Flask
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
+    # Iniciar Flask con configuración para producción
+    app.run(host='0.0.0.0', port=port, threaded=True)
