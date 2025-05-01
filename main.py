@@ -122,7 +122,11 @@ def home():
 
 # Lanzar la app y el thread de verificación
 if __name__ == '__main__':
-    # Iniciar el thread de verificación de firmware en segundo plano
+    # Iniciar el thread de verificación de firmware
     threading.Thread(target=firmware_check_loop, daemon=True).start()
-    # Iniciar la aplicación Flask
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    
+    # Configuración del puerto
+    port = int(os.environ.get("PORT", 10000))
+    
+    # Iniciar Flask con configuración para producción
+    app.run(host='0.0.0.0', port=port, threaded=True)
