@@ -5,6 +5,8 @@
 
 Un script que verifica automáticamente nuevas versiones de firmware para dispositivos Samsung y notifica mediante un webhook de Discord.
 
+El chequeo de versión consulta directamente el **servidor FUS de Samsung** (`fota-cloud-dn.ospserver.net`, el mismo que usan Kies/Smart Switch/Frija/Odin), no el HTML de samfw.com — desde que samfw.com empezó a exigir un challenge JS de Cloudflare (2026-08-29) dejó de ser scrapeable con requests/curl simples. samfw.com se sigue usando únicamente como link de referencia humano en la notificación de Discord.
+
 ## 🚀 Instalación
 
 ```bash
@@ -39,7 +41,7 @@ curl, grep, awk (para versión bash)
 | `WEBHOOK_URL` | — | Webhook de Discord (obligatorio) |
 | `CURRENT_VERSION` | `S901U1UES8EYC1` | Versión de referencia inicial. Ignorada si `DEVICES_JSON` está seteada |
 | `DEVICES_JSON` | — | Lista JSON para monitorear **más de un dispositivo** a la vez, reemplaza a `MODEL`/`CSC`/`CURRENT_VERSION`. Ej.: `[{"model":"S901U1","csc":"XAA","current_version":"S901U1UES8EYC1"},{"model":"S918U1","csc":"XAA","current_version":"S918U1UES1AYE1"}]` |
-| `FAILURE_ALERT_THRESHOLD` | `5` | Chequeos fallidos seguidos (por dispositivo) antes de mandar una alerta de Discord avisando que el scraper puede estar roto (cambio en samfw.com, bloqueo, etc.) |
+| `FAILURE_ALERT_THRESHOLD` | `5` | Chequeos fallidos seguidos (por dispositivo) antes de mandar una alerta de Discord avisando que el chequeo puede estar roto (cambio de formato en el FUS de Samsung, bloqueo, etc.) |
 | `PORT` | `10000` | Puerto donde escucha el dashboard |
 | `STATE_DIR` | `/tmp` | Carpeta donde se persiste `firmware_state.json` entre reinicios. En Render, `/tmp` es efímero — si montás un disco persistente, apuntá `STATE_DIR` a ese path para no perder la última versión detectada en cada redeploy/reinicio |
 

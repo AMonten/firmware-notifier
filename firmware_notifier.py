@@ -27,7 +27,7 @@ def main():
     while True:
         try:
             print(f"\n🔎 Verificando actualizaciones {time.strftime('%Y-%m-%d %H:%M:%S')}...")
-            latest_version, error = get_latest_version(url)
+            latest_version, error = get_latest_version(model, csc)
 
             if error:
                 print(f"⚠️ No se pudo obtener la última versión: {error}")

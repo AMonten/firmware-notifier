@@ -1,63 +1,55 @@
 """
-Lógica compartida de scraping/notificación entre main.py (servicio Flask/Render)
+Lógica compartida de chequeo/notificación entre main.py (servicio Flask/Render)
 y firmware_notifier.py (CLI standalone). Antes vivía duplicada letra por letra
-en los dos archivos — si samfw.com cambia el HTML, ahora sólo hay que tocar
-un lugar.
+en los dos archivos.
+
+El chequeo de versión usa el servidor FUS de Samsung
+(fota-cloud-dn.ospserver.net) — el mismo endpoint que consultan Kies/Smart
+Switch/Frija/Odin para buscar actualizaciones — en vez de scrapear el HTML de
+samfw.com. Se cambió el 2026-08-29 porque samfw.com empezó a exigir un
+challenge JS de Cloudflare (no resoluble con requests/headers, hace falta un
+browser real); el FUS es la fuente oficial y no tiene protección anti-bot.
+samfw.com se sigue usando como link humano de referencia en la notificación
+(un browser real sí puede resolver su challenge).
 """
 
-import random
+import xml.etree.ElementTree as ET
+
 import requests
-from bs4 import BeautifulSoup
-
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15",
-    "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:124.0) Gecko/20100101 Firefox/124.0",
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
-    "Mozilla/5.0 (Linux; Android 13; SM-S901U1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.93 Mobile Safari/537.36",
-]
-
-
-def get_headers():
-    return {
-        "User-Agent": random.choice(USER_AGENTS),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-        "DNT": "1",
-    }
 
 
 def build_url(model, csc):
+    """Página humana en samfw.com, sólo para el link de la notificación."""
     return f"https://samfw.com/firmware/SM-{model}/{csc}"
 
 
+def build_check_url(model, csc):
+    """Servidor FUS de Samsung usado por el chequeo automático de versión."""
+    return f"https://fota-cloud-dn.ospserver.net/firmware/{csc}/SM-{model}/version.xml"
+
+
 ## FUNCIÓN: get_latest_version()
-# Propósito: Scrapear samfw.com y devolver la última versión publicada.
+# Propósito: Consultar el FUS de Samsung y devolver la última versión publicada.
 # Devuelve (version, error): error es None si todo salió bien, o un mensaje
 # legible si falló (para que cada caller decida cómo loguearlo/notificarlo).
-def get_latest_version(url, timeout=15):
+def get_latest_version(model, csc, timeout=15):
+    url = build_check_url(model, csc)
     try:
-        response = requests.get(url, headers=get_headers(), timeout=timeout)
+        response = requests.get(url, timeout=timeout)
         response.raise_for_status()
 
-        soup = BeautifulSoup(response.text, "html.parser")
-        table = soup.find("table", {"id": "firmwares"})
-        if not table:
-            return None, "No se encontró la tabla de firmwares"
+        root = ET.fromstring(response.content)
+        latest_el = root.find(".//latest")
+        if latest_el is None or not (latest_el.text or "").strip():
+            return None, "El XML de Samsung no trae <latest>"
 
-        first_row = table.tbody.find("tr")
-        if not first_row:
-            return None, "No hay filas en la tabla"
+        # Formato "PDA/CSC/PHONE" (ej. "S901U1UESAGZF3/S901U1OYMAGZF3/S901U1UESAGZF3").
+        # Se usa el primer componente (PDA), que es el estilo de versión que
+        # ya se venía usando en este proyecto (ej. S901U1UES8EYC1).
+        return latest_el.text.strip().split("/")[0], None
 
-        version_td = first_row.find_all("td")[2]
-        version_link = version_td.find("a")
-        if not version_link:
-            return None, "No se encontró el link de versión"
-
-        return version_link.text.strip(), None
-
+    except ET.ParseError as e:
+        return None, f"XML inválido: {e}"
     except Exception as e:
         return None, str(e)
 

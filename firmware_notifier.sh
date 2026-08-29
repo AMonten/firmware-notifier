@@ -2,7 +2,6 @@
 
 # Configuración
 CHECK_INTERVAL=1800  # 30 minutos en segundos
-USER_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 # Colores para la salida
 RED='\033[0;31m'
@@ -63,14 +62,19 @@ while true; do
     fi
 done
 
-# Construir URL
-url="https://samfw.com/firmware/SM-${model}/${csc}"
-echo -e "\n${BLUE}ℹ URL de verificación: $url${NC}"
+# check_url es el servidor FUS de Samsung (el mismo que usan Kies/Smart
+# Switch/Frija/Odin para buscar actualizaciones) — a diferencia de samfw.com
+# no tiene protección anti-bot de Cloudflare. download_url sigue apuntando a
+# samfw.com sólo como link de referencia humano en la notificación (un
+# browser real sí resuelve su challenge, curl no).
+check_url="https://fota-cloud-dn.ospserver.net/firmware/${csc}/SM-${model}/version.xml"
+download_url="https://samfw.com/firmware/SM-${model}/${csc}"
+echo -e "\n${BLUE}ℹ URL de verificación (FUS Samsung): $check_url${NC}"
 
 # Función para enviar notificación a Discord
 send_notification() {
     if [[ -n "$webhook_url" ]]; then
-        local message="🚨 **Nueva actualización disponible!** 🚨\n📱 **Modelo:** SM-${model}/${csc}\n🆕 **Versión:** ${latest_version}\n🔗 ${url}"
+        local message="🚨 **Nueva actualización disponible!** 🚨\n📱 **Modelo:** SM-${model}/${csc}\n🆕 **Versión:** ${latest_version}\n🔗 ${download_url}"
         
         response=$(curl -sw "%{http_code}" -H "Content-Type: application/json" \
             -X POST \
@@ -99,27 +103,31 @@ while true; do
     # Obtener la última versión
     echo -e "${YELLOW}⏳ Obteniendo información del servidor...${NC}"
     
-    page_content=$(curl -s -A "$USER_AGENT" -w "%{http_code}" "$url")
+    page_content=$(curl -s -w "%{http_code}" "$check_url")
     status_code=${page_content: -3}
     content=${page_content%???}
-    
+
     if [[ $status_code -ne 200 ]]; then
         echo -e "${RED}✗ Error en la solicitud (Código: $status_code)${NC}"
         sleep 60
         continue
     fi
-    
+
     if [[ -z "$content" ]]; then
         echo -e "${RED}✗ No se recibió contenido del servidor${NC}"
         sleep 60
         continue
     fi
-    
-    latest_version=$(echo "$content" | grep -oP 'S[0-9]{3}[A-Za-z0-9]+UES[0-9A-Z]+(?=")' | head -n 1)
-    
+
+    # El XML trae "<latest>PDA/CSC/PHONE</latest>" — se usa el primer
+    # componente (PDA), el mismo estilo de versión que ya se venía usando
+    # (ej. S901U1UES8EYC1).
+    latest_full=$(echo "$content" | grep -oP '<latest[^>]*>\K[^<]+' | head -n 1)
+    latest_version="${latest_full%%/*}"
+
     if [[ -z "$latest_version" ]]; then
-        echo -e "${RED}✗ No se pudo extraer la versión de la página${NC}"
-        echo -e "${YELLOW}ℹ Posibles causas:\n1. Modelo/CSC incorrectos\n2. Estructura del sitio cambiada\n3. No hay actualizaciones disponibles${NC}"
+        echo -e "${RED}✗ No se pudo extraer la versión del XML${NC}"
+        echo -e "${YELLOW}ℹ Posibles causas:\n1. Modelo/CSC incorrectos\n2. El servidor de Samsung cambió el formato\n3. No hay actualizaciones disponibles${NC}"
     else
         echo -e "${BLUE}ℹ Versión actual: $current_version${NC}"
         echo -e "${BLUE}ℹ Última versión disponible: $latest_version${NC}"

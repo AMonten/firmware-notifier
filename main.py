@@ -232,10 +232,10 @@ def load_state():
 # seguidos (antes esos fallos sólo quedaban en un log que nadie mira).
 def check_device(device, webhook_url):
     key = device_key(device)
-    url = build_url(device["model"], device["csc"])
+    url = build_url(device["model"], device["csc"])  # link humano de referencia en la notificación
     dstate = DEVICE_STATE[key]
 
-    latest_version, error = get_latest_version(url)
+    latest_version, error = get_latest_version(device["model"], device["csc"])
 
     if error:
         dstate["consecutive_failures"] += 1
