@@ -14,7 +14,14 @@ app = Flask(__name__)
 CHECK_INTERVAL = 1800  # 30 minutos (en segundos)
 TEMP_DIR = os.getenv('TEMP', '/tmp')
 LOG_FILE = os.path.join(TEMP_DIR, "firmware_check.log")
-STATE_FILE = os.path.join(TEMP_DIR, "firmware_state.json")
+# STATE_DIR es configurable porque en Render el filesystem por defecto (/tmp)
+# es efímero: se pierde en cada reinicio/redeploy, y con él la última versión
+# detectada — al reiniciar, CURRENT_VERSION vuelve al valor hardcodeado y
+# puede disparar una notificación repetida de una versión que ya se avisó.
+# Si se monta un disco persistente en Render, apuntar STATE_DIR a ese path
+# para que el estado sobreviva a los reinicios.
+STATE_DIR = os.getenv('STATE_DIR', TEMP_DIR)
+STATE_FILE = os.path.join(STATE_DIR, "firmware_state.json")
 
 # Estado persistente
 LAST_CHECK = None
@@ -259,13 +266,15 @@ def home():
         logs=read_logs()
     )
 
-# Inicialización
+# Inicialización: corre tanto si el módulo se ejecuta directo (python main.py)
+# como si lo importa un servidor WSGI (gunicorn main:app) — con gunicorn nunca
+# se llega al bloque __main__, así que el thread de verificación tiene que
+# arrancar a nivel de módulo para no quedar sin correr.
+load_state()
+threading.Thread(target=firmware_check_loop, daemon=True).start()
+
 if __name__ == '__main__':
-    load_state()
-    
-    # Iniciar el thread de verificación
-    threading.Thread(target=firmware_check_loop, daemon=True).start()
-    
-    # Configuración para Render
+    # Servidor de desarrollo de Flask, sólo para correr local (python main.py).
+    # En producción (Render) se usa gunicorn vía build_and_run.sh.
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)

@@ -30,5 +30,16 @@ Python 3.7+
 bash (para versión ligera)
 curl, grep, awk (para versión bash)
 
+## 🔧 Variables de entorno (`main.py` / Render)
+
+| Variable | Default | Descripción |
+|---|---|---|
+| `MODEL` | `S901U1` | Modelo del dispositivo (sin el prefijo `SM-`) |
+| `CSC` | `XAA` | Código CSC/región |
+| `WEBHOOK_URL` | — | Webhook de Discord (obligatorio) |
+| `CURRENT_VERSION` | `S901U1UES8EYC1` | Versión de referencia inicial |
+| `PORT` | `10000` | Puerto donde escucha el dashboard |
+| `STATE_DIR` | `/tmp` | Carpeta donde se persiste `firmware_state.json` entre reinicios. En Render, `/tmp` es efímero — si montás un disco persistente, apuntá `STATE_DIR` a ese path para no perder la última versión detectada en cada redeploy/reinicio |
+
 ## 📜 Licencia
 Este proyecto está bajo la Licencia MIT.

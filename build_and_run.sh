@@ -5,9 +5,8 @@ set -o errexit
 # Instalar dependencias
 pip install -r requirements.txt
 
-# Iniciar la aplicación en segundo plano
-nohup python main.py > app.log 2>&1 &
-
-# Opcional: mantener el proceso activo para que Render no lo termine
-# (esto depende de cómo Render maneje los build commands)
-tail -f /dev/null
+# Servidor de producción (gunicorn + worker gevent, ambos en requirements.txt).
+# Un solo worker: el thread de verificación de firmware corre a nivel de
+# módulo (ver main.py), así que más de un worker lanzaría más de un loop de
+# chequeo en paralelo y notificaciones duplicadas.
+exec gunicorn --worker-class gevent --workers 1 --bind "0.0.0.0:${PORT:-10000}" main:app
