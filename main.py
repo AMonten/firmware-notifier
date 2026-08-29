@@ -1,43 +1,35 @@
 import os
 import threading
 import time
-import random
-import requests
 import json
-from bs4 import BeautifulSoup
-from flask import Flask, render_template_string
+
+from flask import Flask, render_template_string, redirect, url_for, request
+
+from firmware_scraper import build_url, get_latest_version, send_discord_notification, format_update_message
 
 # Inicializar Flask
 app = Flask(__name__)
 
 # Configuración fija
 CHECK_INTERVAL = 1800  # 30 minutos (en segundos)
+FAILURE_ALERT_THRESHOLD = int(os.environ.get("FAILURE_ALERT_THRESHOLD", 5))
 TEMP_DIR = os.getenv('TEMP', '/tmp')
 LOG_FILE = os.path.join(TEMP_DIR, "firmware_check.log")
 # STATE_DIR es configurable porque en Render el filesystem por defecto (/tmp)
 # es efímero: se pierde en cada reinicio/redeploy, y con él la última versión
-# detectada — al reiniciar, CURRENT_VERSION vuelve al valor hardcodeado y
-# puede disparar una notificación repetida de una versión que ya se avisó.
+# detectada — al reiniciar, cada dispositivo vuelve a su seed_version y puede
+# disparar una notificación repetida de una versión que ya se avisó.
 # Si se monta un disco persistente en Render, apuntar STATE_DIR a ese path
 # para que el estado sobreviva a los reinicios.
 STATE_DIR = os.getenv('STATE_DIR', TEMP_DIR)
 STATE_FILE = os.path.join(STATE_DIR, "firmware_state.json")
 
-# Estado persistente
+# Estado persistente (protegido por CHECK_LOCK durante escrituras/lecturas de un chequeo)
 LAST_CHECK = None
 NEXT_CHECK = None
-CURRENT_VERSION = os.environ.get("CURRENT_VERSION", "S901U1UES8EYC1")
+DEVICE_STATE = {}  # key "MODEL/CSC" -> {current_version, consecutive_failures, failure_alerted}
+CHECK_LOCK = threading.Lock()
 
-# Lista de User-Agents
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15",
-    "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:124.0) Gecko/20100101 Firefox/124.0",
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
-    "Mozilla/5.0 (Linux; Android 13; SM-S901U1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.93 Mobile Safari/537.36",
-]
-
-# HTML template con CSS integrado
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -72,6 +64,7 @@ HTML_TEMPLATE = """
             margin-bottom: 20px;
             border-radius: 4px;
         }
+        .status-card.warning { border-left-color: #f39c12; }
         .log-container {
             background: #2c3e50;
             color: #ecf0f1;
@@ -83,33 +76,54 @@ HTML_TEMPLATE = """
             max-height: 500px;
             overflow-y: auto;
         }
-        .log-entry {
-            margin-bottom: 5px;
-        }
+        .log-entry { margin-bottom: 5px; }
         .success { color: #2ecc71; }
         .error { color: #e74c3c; }
         .warning { color: #f39c12; }
         .info { color: #3498db; }
+        button {
+            background: #3498db;
+            color: white;
+            border: none;
+            padding: 10px 18px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        button:hover { background: #2980b9; }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>Firmware Notifier Status</h1>
-        
+
         <div class="status-card">
             <h2>Service Information</h2>
             <p><strong>Status:</strong> <span class="success">✔ Running</span></p>
-            <p><strong>Model:</strong> SM-{{ model }}/{{ csc }}</p>
-            <p><strong>Current Version:</strong> {{ current_version }}</p>
             <p><strong>Last Check:</strong> {{ last_check }}</p>
             <p><strong>Next Check:</strong> {{ next_check }}</p>
             <p><strong>Check Interval:</strong> {{ check_interval }} minutes</p>
+            {% if msg %}<p><strong>ℹ {{ msg }}</strong></p>{% endif %}
+            <form method="POST" action="/check">
+                <button type="submit">🔄 Chequear ahora</button>
+            </form>
         </div>
-        
+
+        <h2>Dispositivos monitoreados</h2>
+        {% for dev in devices %}
+        <div class="status-card {% if dev.consecutive_failures > 0 %}warning{% endif %}">
+            <p><strong>Modelo:</strong> SM-{{ dev.model }}/{{ dev.csc }}</p>
+            <p><strong>Versión actual conocida:</strong> {{ dev.current_version }}</p>
+            {% if dev.consecutive_failures > 0 %}
+            <p><strong>⚠ Fallos seguidos:</strong> {{ dev.consecutive_failures }}</p>
+            {% endif %}
+        </div>
+        {% endfor %}
+
         <h2>Recent Logs</h2>
         <div class="log-container">
             {% for log in logs[-50:] %}
-                <div class="log-entry 
+                <div class="log-entry
                     {% if '✅' in log or '✔' in log %}success
                     {% elif '❌' in log or 'Error' in log %}error
                     {% elif '⚠️' in log or 'Warning' in log %}warning
@@ -123,37 +137,42 @@ HTML_TEMPLATE = """
 </html>
 """
 
-# Funciones de persistencia
-def save_state():
-    state = {
-        'last_check': LAST_CHECK,
-        'next_check': NEXT_CHECK,
-        'current_version': CURRENT_VERSION
-    }
-    with open(STATE_FILE, 'w') as f:
-        json.dump(state, f)
 
-def load_state():
-    try:
-        with open(STATE_FILE, 'r') as f:
-            state = json.load(f)
-            global LAST_CHECK, NEXT_CHECK, CURRENT_VERSION
-            LAST_CHECK = state.get('last_check')
-            NEXT_CHECK = state.get('next_check')
-            CURRENT_VERSION = state.get('current_version', os.environ.get("CURRENT_VERSION", "S901U1UES8EYC1"))
-    except (FileNotFoundError, json.JSONDecodeError):
-        pass
+## FUNCIÓN: load_devices_config()
+# Propósito: Leer DEVICES_JSON (lista de {model,csc,current_version}) si está
+# configurado; si no, caer al comportamiento original de un solo dispositivo
+# vía MODEL/CSC/CURRENT_VERSION, para no romper despliegues existentes.
+def load_devices_config():
+    raw = os.environ.get("DEVICES_JSON")
+    if raw:
+        try:
+            raw_devices = json.loads(raw)
+            parsed = [
+                {
+                    "model": str(d["model"]).strip().upper(),
+                    "csc": str(d["csc"]).strip().upper(),
+                    "seed_version": str(d.get("current_version", "")).strip().upper(),
+                }
+                for d in raw_devices
+            ]
+            if parsed:
+                return parsed
+        except Exception as e:
+            print(f"⚠️ DEVICES_JSON inválido ({e}), usando MODEL/CSC/CURRENT_VERSION.")
 
-# Funciones auxiliares
-def get_headers():
-    return {
-        "User-Agent": random.choice(USER_AGENTS),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-        "DNT": "1",
-    }
+    return [{
+        "model": os.environ.get("MODEL", "S901U1").strip().upper(),
+        "csc": os.environ.get("CSC", "XAA").strip().upper(),
+        "seed_version": os.environ.get("CURRENT_VERSION", "S901U1UES8EYC1").strip().upper(),
+    }]
+
+
+DEVICES = load_devices_config()
+
+
+def device_key(device):
+    return f"{device['model']}/{device['csc']}"
+
 
 def log_error(message):
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -162,89 +181,132 @@ def log_error(message):
     with open(LOG_FILE, 'a') as f:
         f.write(log_entry + "\n")
 
-def get_latest_version(url):
-    try:
-        response = requests.get(url, headers=get_headers(), timeout=15)
-        response.raise_for_status()
-        
-        soup = BeautifulSoup(response.text, 'html.parser')
-        table = soup.find('table', {'id': 'firmwares'})
-        
-        if not table:
-            log_error("⚠️ No se encontró la tabla de firmwares")
-            return None
-            
-        first_row = table.tbody.find('tr')
-        if not first_row:
-            log_error("⚠️ No hay filas en la tabla")
-            return None
-            
-        version_td = first_row.find_all('td')[2]
-        version_link = version_td.find('a')
-        
-        if version_link:
-            return version_link.text.strip()
-        return None
-        
-    except Exception as e:
-        log_error(f"❌ Error al obtener la versión: {str(e)}")
-        return None
 
-def send_notification(webhook_url, model, csc, latest_version, url):
-    data = {
-        "content": (
-            f"🚨 **Nueva actualización disponible!** 🚨\n"
-            f"📱 **Modelo:** SM-{model}/{csc}\n"
-            f"🆕 **Versión:** {latest_version}\n"
-            f"🌐 **Descargar:** {url}"
-        )
+## FUNCIÓN: save_state() / load_state()
+# Propósito: Persistir/recuperar last_check/next_check y el estado por dispositivo.
+def save_state():
+    state = {
+        'last_check': LAST_CHECK,
+        'next_check': NEXT_CHECK,
+        'devices': DEVICE_STATE,
     }
+    with open(STATE_FILE, 'w') as f:
+        json.dump(state, f)
+
+
+def load_state():
+    global LAST_CHECK, NEXT_CHECK, DEVICE_STATE
+
+    saved_devices = None
     try:
-        response = requests.post(webhook_url, json=data, timeout=10)
-        response.raise_for_status()
-        log_error("✅ Notificación enviada correctamente.")
-    except Exception as e:
-        log_error(f"❌ Error al enviar notificación: {str(e)}")
+        with open(STATE_FILE, 'r') as f:
+            state = json.load(f)
+        LAST_CHECK = state.get('last_check')
+        NEXT_CHECK = state.get('next_check')
+        saved_devices = state.get('devices')
+        if saved_devices is None and 'current_version' in state and len(DEVICES) == 1:
+            # Formato de antes del soporte multi-dispositivo: migrarlo.
+            saved_devices = {
+                device_key(DEVICES[0]): {
+                    "current_version": state.get("current_version"),
+                    "consecutive_failures": 0,
+                    "failure_alerted": False,
+                }
+            }
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
 
-def firmware_check_loop():
-    global LAST_CHECK, NEXT_CHECK, CURRENT_VERSION
-    
-    model = os.environ.get("MODEL", "S901U1")
-    csc = os.environ.get("CSC", "XAA")
+    saved_devices = saved_devices or {}
+    for device in DEVICES:
+        key = device_key(device)
+        DEVICE_STATE[key] = saved_devices.get(key, {
+            "current_version": device["seed_version"],
+            "consecutive_failures": 0,
+            "failure_alerted": False,
+        })
+
+
+## FUNCIÓN: check_device()
+# Propósito: Chequear un dispositivo, notificar si hay versión nueva, y
+# alertar por Discord si el chequeo lleva FAILURE_ALERT_THRESHOLD fallos
+# seguidos (antes esos fallos sólo quedaban en un log que nadie mira).
+def check_device(device, webhook_url):
+    key = device_key(device)
+    url = build_url(device["model"], device["csc"])
+    dstate = DEVICE_STATE[key]
+
+    latest_version, error = get_latest_version(url)
+
+    if error:
+        dstate["consecutive_failures"] += 1
+        log_error(f"⚠️ [{key}] Error al obtener la versión: {error} (fallos seguidos: {dstate['consecutive_failures']})")
+        if dstate["consecutive_failures"] >= FAILURE_ALERT_THRESHOLD and not dstate["failure_alerted"]:
+            msg = (
+                f"⚠️ **Firmware Notifier**: {dstate['consecutive_failures']} chequeos seguidos fallando "
+                f"para SM-{device['model']}/{device['csc']}.\nÚltimo error: {error}\n{url}"
+            )
+            send_discord_notification(webhook_url, msg)
+            dstate["failure_alerted"] = True
+        return
+
+    if dstate["consecutive_failures"] > 0:
+        log_error(f"✅ [{key}] Se recuperó el chequeo tras {dstate['consecutive_failures']} fallo(s) seguido(s).")
+    dstate["consecutive_failures"] = 0
+    dstate["failure_alerted"] = False
+
+    if latest_version != dstate["current_version"]:
+        log_error(f"✅ [{key}] ¡Nueva versión detectada! ({latest_version}) Enviando notificación...")
+        message = format_update_message(device["model"], device["csc"], latest_version, url)
+        ok, send_error = send_discord_notification(webhook_url, message)
+        if ok:
+            log_error("✅ Notificación enviada correctamente.")
+        else:
+            log_error(f"❌ Error al enviar notificación: {send_error}")
+        dstate["current_version"] = latest_version
+    else:
+        log_error(f"⏳ [{key}] No hay nuevas versiones (actual: {dstate['current_version']})")
+
+
+## FUNCIÓN: run_all_checks()
+# Propósito: Correr un pase de chequeo sobre todos los dispositivos. La usan
+# tanto el loop automático como el botón "Chequear ahora" del dashboard.
+def run_all_checks():
+    global LAST_CHECK, NEXT_CHECK
+
     webhook_url = os.environ.get("WEBHOOK_URL")
-
     if not webhook_url:
         log_error("❌ WEBHOOK_URL no está configurado.")
         return
 
-    url = f"https://samfw.com/firmware/SM-{model}/{csc}"
+    LAST_CHECK = time.strftime("%Y-%m-%d %H:%M:%S")
+    NEXT_CHECK = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() + CHECK_INTERVAL))
+    log_error(f"🔎 Verificando actualizaciones {LAST_CHECK}...")
+
+    for device in DEVICES:
+        check_device(device, webhook_url)
+
+    save_state()
+
+
+def firmware_check_loop():
     log_error("=== Firmware Notifier ===")
-    log_error(f"📡 Monitoring: SM-{model}/{csc} (Current: {CURRENT_VERSION})")
-    
+    for device in DEVICES:
+        log_error(f"📡 Monitoring: SM-{device['model']}/{device['csc']} (seed: {device['seed_version']})")
+
     while True:
         try:
-            LAST_CHECK = time.strftime("%Y-%m-%d %H:%M:%S")
-            NEXT_CHECK = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() + CHECK_INTERVAL))
-            
-            log_error(f"🔎 Verificando actualizaciones {LAST_CHECK}...")
-            latest_version = get_latest_version(url)
-            
-            if not latest_version:
-                log_error("⚠️ No se pudo obtener la última versión.")
-            elif latest_version != CURRENT_VERSION:
-                log_error(f"✅ ¡Nueva versión detectada! ({latest_version}) Enviando notificación...")
-                send_notification(webhook_url, model, csc, latest_version, url)
-                CURRENT_VERSION = latest_version
-                save_state()
+            if CHECK_LOCK.acquire(blocking=False):
+                try:
+                    run_all_checks()
+                finally:
+                    CHECK_LOCK.release()
             else:
-                log_error(f"⏳ No hay nuevas versiones (actual: {CURRENT_VERSION})")
-            
-            save_state()
-                
+                log_error("⏳ Chequeo manual en curso, se omite este ciclo automático.")
         except Exception as e:
             log_error(f"❌ Error en el loop principal: {str(e)}")
-        
+
         time.sleep(CHECK_INTERVAL)
+
 
 def read_logs():
     try:
@@ -253,18 +315,41 @@ def read_logs():
     except FileNotFoundError:
         return ["No hay registros disponibles."]
 
+
 # Rutas Flask
 @app.route('/')
 def home():
+    devices_view = [
+        {
+            "model": device["model"],
+            "csc": device["csc"],
+            "current_version": DEVICE_STATE.get(device_key(device), {}).get("current_version", "?"),
+            "consecutive_failures": DEVICE_STATE.get(device_key(device), {}).get("consecutive_failures", 0),
+        }
+        for device in DEVICES
+    ]
     return render_template_string(HTML_TEMPLATE,
-        model=os.environ.get("MODEL", "S901U1"),
-        csc=os.environ.get("CSC", "XAA"),
-        current_version=CURRENT_VERSION,
+        devices=devices_view,
         last_check=LAST_CHECK or "No se ha verificado aún",
         next_check=NEXT_CHECK or "No programado",
-        check_interval=CHECK_INTERVAL//60,
-        logs=read_logs()
+        check_interval=CHECK_INTERVAL // 60,
+        logs=read_logs(),
+        msg=request.args.get("msg"),
     )
+
+
+@app.route('/check', methods=['POST'])
+def manual_check():
+    if CHECK_LOCK.acquire(blocking=False):
+        try:
+            run_all_checks()
+            msg = "Chequeo manual completado."
+        finally:
+            CHECK_LOCK.release()
+    else:
+        msg = "Ya hay un chequeo en curso — esperá a que termine."
+    return redirect(url_for('home', msg=msg))
+
 
 # Inicialización: corre tanto si el módulo se ejecuta directo (python main.py)
 # como si lo importa un servidor WSGI (gunicorn main:app) — con gunicorn nunca
