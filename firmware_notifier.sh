@@ -22,10 +22,12 @@ validate_input() {
     return 0
 }
 
-# Validar formato de versión
+# Validar formato de versión. Genérico a propósito: el infijo de 3 letras
+# varía según el dispositivo/branch de firmware (UES, SQS, SQU, UEU, etc.),
+# no sólo "UES".
 validate_version() {
-    if [[ ! "$1" =~ ^S[0-9]{3}[A-Za-z0-9]+UES[0-9A-Z]+$ ]]; then
-        echo -e "${RED}Error: Formato de versión inválido (ej: S901U1UES8EYC1)${NC}"
+    if [[ ! "$1" =~ ^[A-Z][0-9]{3}[A-Za-z0-9]{4,}$ ]]; then
+        echo -e "${RED}Error: Formato de versión inválido (ej: S921USQS6DZG1)${NC}"
         return 1
     fi
     return 0
@@ -33,17 +35,17 @@ validate_version() {
 
 # Solicitar los datos al usuario con validación
 while true; do
-    read -p "🔧 Ingresa el modelo (ej: S901U1): " model
+    read -p "🔧 Ingresa el modelo (ej: S921U): " model
     validate_input "$model" && break
 done
 
 while true; do
-    read -p "🌐 Ingresa el CSC (ej: XAA): " csc
+    read -p "🌐 Ingresa el CSC (ej: TMB): " csc
     validate_input "$csc" && break
 done
 
 while true; do
-    read -p "📦 Ingresa tu versión actual (ej: S901U1UES8EYC1): " current_version
+    read -p "📦 Ingresa tu versión actual (ej: S921USQS6DZG1): " current_version
     validate_input "$current_version" && validate_version "$current_version" && break
 done
 
@@ -121,7 +123,7 @@ while true; do
 
     # El XML trae "<latest>PDA/CSC/PHONE</latest>" — se usa el primer
     # componente (PDA), el mismo estilo de versión que ya se venía usando
-    # (ej. S901U1UES8EYC1).
+    # (ej. S921USQS6DZG1).
     latest_full=$(echo "$content" | grep -oP '<latest[^>]*>\K[^<]+' | head -n 1)
     latest_version="${latest_full%%/*}"
 

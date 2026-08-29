@@ -36,11 +36,11 @@ curl, grep, awk (para versión bash)
 
 | Variable | Default | Descripción |
 |---|---|---|
-| `MODEL` | `S901U1` | Modelo del dispositivo (sin el prefijo `SM-`). Ignorada si `DEVICES_JSON` está seteada |
-| `CSC` | `XAA` | Código CSC/región. Ignorada si `DEVICES_JSON` está seteada |
+| `MODEL` | `S921U` | Modelo del dispositivo (sin el prefijo `SM-`). Ignorada si `DEVICES_JSON` está seteada |
+| `CSC` | `TMB` | Código CSC/región (T-Mobile US). Ignorada si `DEVICES_JSON` está seteada |
 | `WEBHOOK_URL` | — | Webhook de Discord (obligatorio) |
-| `CURRENT_VERSION` | `S901U1UES8EYC1` | Versión de referencia inicial. Ignorada si `DEVICES_JSON` está seteada |
-| `DEVICES_JSON` | — | Lista JSON para monitorear **más de un dispositivo** a la vez, reemplaza a `MODEL`/`CSC`/`CURRENT_VERSION`. Ej.: `[{"model":"S901U1","csc":"XAA","current_version":"S901U1UES8EYC1"},{"model":"S918U1","csc":"XAA","current_version":"S918U1UES1AYE1"}]` |
+| `CURRENT_VERSION` | `S921USQS6DZG1` | Versión de referencia inicial. Ignorada si `DEVICES_JSON` está seteada |
+| `DEVICES_JSON` | — | Lista JSON para monitorear **más de un dispositivo** a la vez, reemplaza a `MODEL`/`CSC`/`CURRENT_VERSION`. Ej.: `[{"model":"S921U","csc":"TMB","current_version":"S921USQS6DZG1"},{"model":"S918U1","csc":"XAA","current_version":"S918U1UES1AYE1"}]` |
 | `FAILURE_ALERT_THRESHOLD` | `5` | Chequeos fallidos seguidos (por dispositivo) antes de mandar una alerta de Discord avisando que el chequeo puede estar roto (cambio de formato en el FUS de Samsung, bloqueo, etc.) |
 | `PORT` | `10000` | Puerto donde escucha el dashboard |
 | `STATE_DIR` | `/tmp` | Carpeta donde se persiste `firmware_state.json` entre reinicios. En Render, `/tmp` es efímero — si montás un disco persistente, apuntá `STATE_DIR` a ese path para no perder la última versión detectada en cada redeploy/reinicio |

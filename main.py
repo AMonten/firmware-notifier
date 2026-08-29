@@ -161,9 +161,9 @@ def load_devices_config():
             print(f"⚠️ DEVICES_JSON inválido ({e}), usando MODEL/CSC/CURRENT_VERSION.")
 
     return [{
-        "model": os.environ.get("MODEL", "S901U1").strip().upper(),
-        "csc": os.environ.get("CSC", "XAA").strip().upper(),
-        "seed_version": os.environ.get("CURRENT_VERSION", "S901U1UES8EYC1").strip().upper(),
+        "model": os.environ.get("MODEL", "S921U").strip().upper(),
+        "csc": os.environ.get("CSC", "TMB").strip().upper(),
+        "seed_version": os.environ.get("CURRENT_VERSION", "S921USQS6DZG1").strip().upper(),
     }]
 
 
